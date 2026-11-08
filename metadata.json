@@ -1,0 +1,6 @@
+{
+  "name": "AgentVille 2D - Autonomous AI City Simulation",
+  "description": "An interactive 2D autonomous AI agent city simulator with dynamic cognitive behavior, episodic memories, proximity social interactions, day-night cycles, and god-mode city controls.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
