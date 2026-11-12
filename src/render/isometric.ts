@@ -41,14 +41,14 @@ export interface WorldRect {
 export function worldToIsometric(point: IsometricPoint): WorldPoint {
   return {
     x: (point.x - point.y) * ISO_HALF_WIDTH / 64,
-    y: (point.x + point.y) * ISO_QUARTER_HEIGHT / 64 - (point.z ?? 0),
+    y: (point.x + point.y) * ISO_HALF_HEIGHT / 64 - (point.z ?? 0),
   };
 }
 
 /** Inverse of worldToIsometric for points on the ground plane (z = 0). */
 export function isometricToWorld(point: WorldPoint): WorldPoint {
   const halfX = point.x / (ISO_HALF_WIDTH / 64);
-  const quarterY = point.y / (ISO_QUARTER_HEIGHT / 64);
+  const quarterY = point.y / (ISO_HALF_HEIGHT / 64);
   return {
     x: (halfX + quarterY) / 2,
     y: (quarterY - halfX) / 2,
@@ -59,7 +59,7 @@ export function isometricToWorld(point: WorldPoint): WorldPoint {
 export function projectIsometricVector(vector: WorldPoint): WorldPoint {
   return {
     x: (vector.x - vector.y) * ISO_HALF_WIDTH / 64,
-    y: (vector.x + vector.y) * ISO_QUARTER_HEIGHT / 64,
+    y: (vector.x + vector.y) * ISO_HALF_HEIGHT / 64,
   };
 }
 
