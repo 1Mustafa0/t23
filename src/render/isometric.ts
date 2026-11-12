@@ -15,7 +15,7 @@
 export const ISO_TILE_WIDTH = 64;
 export const ISO_TILE_HEIGHT = 32;
 export const ISO_HALF_WIDTH = ISO_TILE_WIDTH / 2;
-export const ISO_QUARTER_HEIGHT = ISO_TILE_HEIGHT / 4;
+export const ISO_HALF_HEIGHT = ISO_TILE_HEIGHT / 2;
 
 export interface WorldPoint {
   x: number;
