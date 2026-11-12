@@ -1574,7 +1574,7 @@ function drawConstruction(ctx: CanvasRenderingContext2D, loc: LocationNode): voi
 // ENTRY POINT
 // ---------------------------------------------------------------------------
 
-function drawBuildingLocal(
+export function drawBuilding(
   ctx: CanvasRenderingContext2D,
   loc: LocationNode,
   opts: BuildingRenderOptions,
@@ -1649,7 +1649,7 @@ function drawBuildingLocal(
  * Second pass: venue plates are drawn after every building so a label is
  * never clipped by the roof of the neighbouring block.
  */
-function drawBuildingLabelLocal(
+export function drawBuildingLabel(
   ctx: CanvasRenderingContext2D,
   loc: LocationNode,
   opts: BuildingRenderOptions,
@@ -1663,95 +1663,4 @@ function drawBuildingLabelLocal(
     : loc.type;
   const style = TYPOLOGIES[resolvedType] ?? DEFAULT_TYPOLOGY;
   drawVenuePlate(ctx, loc, style, readService(loc, opts), opts.hoveredLocationId === loc.id);
-}
-
-
-/**
- * Rotate each building so its architectural front faces the street-side door.
- * East/west lots use a quarter-turn and swapped local dimensions; this keeps
- * the rendered footprint inside the original world-space lot.
- */
-interface FacadeTransform {
-  centerX: number;
-  centerY: number;
-  angle: number;
-  localLocation: LocationNode;
-}
-
-function orientBuildingToDoor(loc: LocationNode): FacadeTransform {
-  const centerX = loc.x + loc.width / 2;
-  const centerY = loc.y + loc.height / 2;
-  const distances = [
-    { side: 'south' as const, distance: Math.abs(loc.door.y - (loc.y + loc.height)) },
-    { side: 'north' as const, distance: Math.abs(loc.door.y - loc.y) },
-    { side: 'east' as const, distance: Math.abs(loc.door.x - (loc.x + loc.width)) },
-    { side: 'west' as const, distance: Math.abs(loc.door.x - loc.x) },
-  ];
-  const side = distances.reduce((best, item) => item.distance < best.distance ? item : best).side;
-
-  // In local renderer space every front door is on the south edge.
-  const angle = side === 'north' ? Math.PI
-    : side === 'east' ? -Math.PI / 2
-    : side === 'west' ? Math.PI / 2
-    : 0;
-  const quarterTurn = side === 'east' || side === 'west';
-  const localWidth = quarterTurn ? loc.height : loc.width;
-  const localHeight = quarterTurn ? loc.width : loc.height;
-  const dx = loc.door.x - centerX;
-  const dy = loc.door.y - centerY;
-
-  let doorX = dx;
-  let doorY = dy;
-  if (side === 'north') {
-    doorX = -dx;
-    doorY = -dy;
-  } else if (side === 'east') {
-    doorX = -dy;
-    doorY = dx;
-  } else if (side === 'west') {
-    doorX = dy;
-    doorY = -dx;
-  }
-
-  return {
-    centerX,
-    centerY,
-    angle,
-    localLocation: {
-      ...loc,
-      x: -localWidth / 2,
-      y: -localHeight / 2,
-      width: localWidth,
-      height: localHeight,
-      door: { x: doorX, y: doorY },
-    },
-  };
-}
-
-/** Draw a building with its front aligned to its actual street-facing door. */
-export function drawBuilding(
-  ctx: CanvasRenderingContext2D,
-  loc: LocationNode,
-  opts: BuildingRenderOptions,
-): void {
-  const transform = orientBuildingToDoor(loc);
-  ctx.save();
-  ctx.translate(transform.centerX, transform.centerY);
-  ctx.rotate(transform.angle);
-  drawBuildingLocal(ctx, transform.localLocation, opts);
-  ctx.restore();
-}
-
-/** Keep facade labels and live service plates aligned with the rotated building. */
-export function drawBuildingLabel(
-  ctx: CanvasRenderingContext2D,
-  loc: LocationNode,
-  opts: BuildingRenderOptions,
-): void {
-  const transform = orientBuildingToDoor(loc);
-  ctx.save();
-  ctx.translate(transform.centerX, transform.centerY);
-  ctx.rotate(transform.angle);
-  drawBuildingLabelLocal(ctx, transform.localLocation, opts);
-  ctx.restore();
 }
