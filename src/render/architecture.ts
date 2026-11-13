@@ -181,15 +181,52 @@ interface Massing {
   shopBand: number;
 }
 
+/**
+ * `loc` here is the visible WALL rectangle (the south elevation), not the whole
+ * footprint — see `wallRect()`. The roof is drawn separately from above.
+ */
 function computeMassing(loc: LocationNode, style: Typology): Massing {
   const bays = clamp(Math.round(loc.width / BAY_TARGET), 2, 6);
   const bayW = (loc.width - 24) / bays;
-  const shopBand = style.storefront && loc.type !== 'market' ? 120 : 0;
-  const rows = style.storefront ? 1 : style.floors;
-  const regionTop = loc.y + 24;
-  const regionBottom = loc.y + loc.height - 24 - shopBand;
-  const floorH = Math.max(34, (regionBottom - regionTop) / rows);
+  const shopBand = style.storefront ? 122 : 0;
+  // A market has only its stall band; other shops get one window row above it.
+  const rows = style.storefront ? (loc.type === 'market' ? 0 : 1) : style.floors;
+  const regionTop = loc.y + 14;
+  const regionBottom = loc.y + loc.height - (style.storefront ? 0 : 20) - shopBand;
+  const floorH = Math.max(30, (regionBottom - regionTop) / Math.max(1, rows));
   return { bays, bayW, rows, floorH, regionTop, regionBottom, shopBand };
+}
+
+// ---------------------------------------------------------------------------
+// 3D MASSING — roof seen from above + the south wall seen by the camera
+// ---------------------------------------------------------------------------
+
+type Side = 'north' | 'east' | 'south' | 'west';
+
+/** Which edge of the footprint the REAL door (used by pathfinding) sits on. */
+function frontSide(loc: LocationNode): Side {
+  const dN = Math.abs(loc.door.y - loc.y);
+  const dS = Math.abs(loc.door.y - (loc.y + loc.height));
+  const dW = Math.abs(loc.door.x - loc.x);
+  const dE = Math.abs(loc.door.x - (loc.x + loc.width));
+  const m = Math.min(dN, dS, dW, dE);
+  if (m === dS) return 'south';
+  if (m === dN) return 'north';
+  if (m === dE) return 'east';
+  return 'west';
+}
+
+/** Height of the visible wall: floors × storey, shop bands included. */
+function wallHeightFor(loc: LocationNode, style: Typology, shop: boolean): number {
+  const raw = shop
+    ? (loc.type === 'market' ? 152 : 188)
+    : style.floors >= 3 ? 160 : style.floors === 2 ? 124 : 100;
+  return Math.min(raw, loc.height - 48); // always leave a readable roof
+}
+
+/** The wall as a rectangle glued to the bottom of the footprint. */
+function wallRect(loc: LocationNode, wallH: number): LocationNode {
+  return { ...loc, y: loc.y + loc.height - wallH, height: wallH };
 }
 
 // ---------------------------------------------------------------------------
@@ -339,29 +376,6 @@ function drawPlinth(ctx: CanvasRenderingContext2D, loc: LocationNode, style: Typ
   }
 }
 
-function drawCornice(ctx: CanvasRenderingContext2D, loc: LocationNode, style: Typology): void {
-  const { x, y, width: w } = loc;
-  const bandY = y + 7;
-
-  ctx.fillStyle = style.trim;
-  ctx.strokeStyle = INK;
-  ctx.lineWidth = 2;
-  roundRect(ctx, x + 3, bandY, w - 6, 11, 4);
-  ctx.fill();
-  ctx.stroke();
-
-  // Shadow line under the cornice gives the facade depth.
-  ctx.fillStyle = 'rgba(44, 62, 80, 0.12)';
-  ctx.fillRect(x + 4, bandY + 11, w - 8, 3);
-
-  if (style.dentils) {
-    ctx.fillStyle = shade(style.trim, -0.22);
-    for (let dx = x + 12; dx < x + w - 12; dx += 15) {
-      ctx.fillRect(dx, bandY + 7, 7, 5);
-    }
-  }
-}
-
 function drawPilasters(ctx: CanvasRenderingContext2D, loc: LocationNode, style: Typology, bays: number): void {
   if (!style.pilasters) return;
   const { x, y, width: w, height: h } = loc;
@@ -448,6 +462,7 @@ function drawOpenings(
   style: Typology,
   massing: Massing,
   isNight: boolean,
+  doorOnWall: boolean,
 ): void {
   const { x, width: w } = loc;
   const { bays, bayW, rows, floorH, regionTop, regionBottom } = massing;
@@ -462,7 +477,8 @@ function drawOpenings(
   for (let f = 0; f < rows; f++) {
     for (let b = 0; b < bays; b++) {
       // The entrance keeps its own clear bay on the ground floor…
-      if (f === rows - 1 && Math.abs(x + 12 + bayW * b + bayW / 2 - doorX) < winW * 0.9 + 16) continue;
+      // (only when the door really is on this wall — otherwise the wall is a flank)
+      if (doorOnWall && f === rows - 1 && Math.abs(x + 12 + bayW * b + bayW / 2 - doorX) < winW * 0.9 + 16) continue;
       // …and the civic emblem gets a medallion bay on the top floor.
       if (hasEmblem && f === 0 && b === centerBay) continue;
 
@@ -800,196 +816,6 @@ function drawEntrance(
 // 5. ROOFS
 // ---------------------------------------------------------------------------
 
-function drawGableRoof(ctx: CanvasRenderingContext2D, loc: LocationNode, style: Typology): void {
-  const { x, y, width: w } = loc;
-  const eave = 12;
-  const ridge = 40;
-
-  ctx.beginPath();
-  ctx.moveTo(x - eave, y + 10);
-  ctx.lineTo(x + w / 2, y - ridge);
-  ctx.lineTo(x + w + eave, y + 10);
-  ctx.closePath();
-  ctx.fillStyle = style.roof;
-  ctx.strokeStyle = INK;
-  ctx.lineWidth = LINE;
-  ctx.fill();
-  ctx.stroke();
-
-  // Fascia board along the eaves.
-  ctx.strokeStyle = shade(style.roof, 0.25);
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.moveTo(x - eave + 2, y + 10);
-  ctx.lineTo(x + w + eave - 2, y + 10);
-  ctx.stroke();
-
-  // Shingle courses.
-  ctx.strokeStyle = shade(style.roof, -0.2);
-  ctx.lineWidth = 1.3;
-  for (let i = 1; i <= 4; i++) {
-    const t = i / 5;
-    const ly = y + 10 - ridge * t;
-    const half = (w / 2 + eave) * (1 - t);
-    ctx.beginPath();
-    ctx.moveTo(x + w / 2 - half, ly);
-    ctx.lineTo(x + w / 2 + half, ly);
-    ctx.stroke();
-  }
-
-  if (loc.type === 'home') {
-    const chimX = x + w - 64;
-    ctx.fillStyle = '#9E3F2C';
-    ctx.strokeStyle = INK;
-    ctx.lineWidth = 2;
-    ctx.fillRect(chimX, y - 24, 20, 32);
-    ctx.strokeRect(chimX, y - 24, 20, 32);
-    ctx.fillStyle = '#7A2E1F';
-    ctx.fillRect(chimX - 3, y - 28, 26, 6);
-    ctx.strokeRect(chimX - 3, y - 28, 26, 6);
-  }
-}
-
-function drawHipRoof(ctx: CanvasRenderingContext2D, loc: LocationNode, style: Typology): void {
-  const { x, y, width: w } = loc;
-  const eave = 10;
-  const ridge = 30;
-  const inset = w * 0.24;
-
-  ctx.beginPath();
-  ctx.moveTo(x - eave, y + 10);
-  ctx.lineTo(x + inset, y - ridge);
-  ctx.lineTo(x + w - inset, y - ridge);
-  ctx.lineTo(x + w + eave, y + 10);
-  ctx.closePath();
-  ctx.fillStyle = style.roof;
-  ctx.strokeStyle = INK;
-  ctx.lineWidth = LINE;
-  ctx.fill();
-  ctx.stroke();
-
-  ctx.strokeStyle = shade(style.roof, -0.22);
-  ctx.lineWidth = 1.4;
-  ctx.beginPath();
-  ctx.moveTo(x - eave, y + 10);
-  ctx.lineTo(x + inset, y - ridge);
-  ctx.moveTo(x + w + eave, y + 10);
-  ctx.lineTo(x + w - inset, y - ridge);
-  ctx.stroke();
-
-  // Ridge tile.
-  ctx.strokeStyle = shade(style.roof, 0.25);
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.moveTo(x + inset, y - ridge + 1);
-  ctx.lineTo(x + w - inset, y - ridge + 1);
-  ctx.stroke();
-}
-
-function drawParapet(ctx: CanvasRenderingContext2D, loc: LocationNode, style: Typology): void {
-  const { x, y, width: w } = loc;
-
-  ctx.fillStyle = shade(style.roof, 0.14);
-  ctx.strokeStyle = INK;
-  ctx.lineWidth = LINE;
-  roundRect(ctx, x - 5, y - 12, w + 10, 18, 4);
-  ctx.fill();
-  ctx.stroke();
-
-  // Coping highlight.
-  ctx.strokeStyle = shade(style.roof, 0.42);
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(x - 2, y - 10.5);
-  ctx.lineTo(x + w + 2, y - 10.5);
-  ctx.stroke();
-
-  const units = Math.max(1, Math.round(w / 140));
-  for (let i = 0; i < units; i++) {
-    const ux = x + 28 + i * ((w - 56) / units);
-    ctx.fillStyle = '#B4C1C9';
-    ctx.strokeStyle = INK;
-    ctx.lineWidth = 1.6;
-    ctx.fillRect(ux, y - 26, 32, 13);
-    ctx.strokeRect(ux, y - 26, 32, 13);
-    ctx.beginPath();
-    ctx.arc(ux + 16, y - 19.5, 4, 0, Math.PI * 2);
-    ctx.stroke();
-  }
-
-  if (loc.type === 'office') {
-    ctx.strokeStyle = INK;
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(x + w * 0.74, y - 12);
-    ctx.lineTo(x + w * 0.74, y - 48);
-    ctx.moveTo(x + w * 0.74 - 9, y - 42);
-    ctx.lineTo(x + w * 0.74 + 9, y - 42);
-    ctx.stroke();
-  }
-}
-
-function drawSawtoothRoof(ctx: CanvasRenderingContext2D, loc: LocationNode, style: Typology): void {
-  const { x, y, width: w } = loc;
-  const teeth = Math.max(3, Math.round(w / 88));
-  const step = w / teeth;
-  ctx.fillStyle = style.roof;
-  ctx.strokeStyle = INK;
-  ctx.lineWidth = LINE;
-  ctx.beginPath();
-  ctx.moveTo(x - 6, y + 10);
-  for (let i = 0; i < teeth; i++) {
-    ctx.lineTo(x + step * i + step * 0.52, y - 30);
-    ctx.lineTo(x + step * (i + 1), y + 10);
-  }
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-
-  ctx.strokeStyle = 'rgba(255,255,255,0.6)';
-  ctx.lineWidth = 2;
-  for (let i = 0; i < teeth; i++) {
-    ctx.beginPath();
-    ctx.moveTo(x + step * i + step * 0.58, y - 22);
-    ctx.lineTo(x + step * (i + 1) - 5, y + 5);
-    ctx.stroke();
-  }
-}
-
-function drawMarquee(ctx: CanvasRenderingContext2D, loc: LocationNode, style: Typology): void {
-  const { x, width: w } = loc;
-  const bandY = loc.y - 36;
-
-  ctx.fillStyle = style.roof;
-  ctx.strokeStyle = INK;
-  ctx.lineWidth = LINE;
-  roundRect(ctx, x + 10, bandY, w - 20, 26, 5);
-  ctx.fill();
-  ctx.stroke();
-
-  const bulbs = Math.max(6, Math.round((w - 36) / 24));
-  for (let i = 0; i < bulbs; i++) {
-    ctx.fillStyle = '#FFE082';
-    ctx.beginPath();
-    ctx.arc(x + 22 + i * ((w - 44) / (bulbs - 1)), bandY + 13, 3.4, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  // Vertical fin sign announcing the picture house.
-  ctx.fillStyle = style.accent;
-  ctx.strokeStyle = INK;
-  ctx.lineWidth = 2;
-  roundRect(ctx, x + 16, bandY - 20, 30, 18, 3);
-  ctx.fill();
-  ctx.stroke();
-  ctx.fillStyle = '#FFFFFF';
-  ctx.font = 'bold 11px system-ui, sans-serif';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText('🎬', x + 31, bandY - 10.5);
-  ctx.textBaseline = 'alphabetic';
-}
-
 function drawPortico(
   ctx: CanvasRenderingContext2D,
   loc: LocationNode,
@@ -1063,8 +889,16 @@ function drawSignature(
   massing: Massing,
 ): void {
   const { x, y, width: w } = loc;
-  const cx = x + w / 2;
+  // Centre of the medallion bay that drawOpenings leaves free (even bay counts
+  // would otherwise put the emblem on the mullion between two windows).
+  const cx = x + 12 + massing.bayW * Math.floor(massing.bays / 2) + massing.bayW / 2;
   const cy = massing.regionTop + massing.floorH * 0.5;
+
+  // Emblems were authored for a taller facade; keep them inside one storey.
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(0.8, 0.8);
+  ctx.translate(-cx, -cy);
 
   if (loc.type === 'hospital') {
     ctx.fillStyle = '#FFFFFF';
@@ -1153,21 +987,6 @@ function drawSignature(
     ctx.moveTo(cx, cy);
     ctx.lineTo(cx + 7, cy + 4);
     ctx.stroke();
-
-    // Flagpole on the parapet.
-    ctx.lineWidth = 2.4;
-    ctx.beginPath();
-    ctx.moveTo(x + w - 34, y - 12);
-    ctx.lineTo(x + w - 34, y - 62);
-    ctx.stroke();
-    ctx.fillStyle = '#E53935';
-    ctx.beginPath();
-    ctx.moveTo(x + w - 34, y - 62);
-    ctx.lineTo(x + w - 6, y - 54);
-    ctx.lineTo(x + w - 34, y - 46);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
   }
 
   if (loc.type === 'wellness') {
@@ -1182,6 +1001,27 @@ function drawSignature(
       ctx.stroke();
     }
   }
+
+  ctx.restore();
+}
+
+/** City-hall flagpole, planted on the roof (the roof is inside the footprint). */
+function drawFlag(ctx: CanvasRenderingContext2D, loc: LocationNode): void {
+  const px = loc.x + loc.width - 40;
+  ctx.strokeStyle = INK;
+  ctx.lineWidth = 2.4;
+  ctx.beginPath();
+  ctx.moveTo(px, loc.y + 34);
+  ctx.lineTo(px, loc.y - 14);
+  ctx.stroke();
+  ctx.fillStyle = '#E53935';
+  ctx.beginPath();
+  ctx.moveTo(px, loc.y - 14);
+  ctx.lineTo(px + 26, loc.y - 7);
+  ctx.lineTo(px, loc.y);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
 }
 
 // ---------------------------------------------------------------------------
@@ -1439,11 +1279,11 @@ function drawHoverCard(
 // 9. STATUS
 // ---------------------------------------------------------------------------
 
-function drawSnowCap(ctx: CanvasRenderingContext2D, loc: LocationNode): void {
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.94)';
+function drawSnowCap(ctx: CanvasRenderingContext2D, roof: RoofRect): void {
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.78)';
   ctx.strokeStyle = 'rgba(44, 62, 80, 0.35)';
   ctx.lineWidth = 1.2;
-  roundRect(ctx, loc.x - 3, loc.y - 5, loc.width + 6, 10, 5);
+  roundRect(ctx, roof.x + 3, roof.y + 3, roof.w - 6, roof.h - 10, 6);
   ctx.fill();
   ctx.stroke();
 }
@@ -1571,6 +1411,388 @@ function drawConstruction(ctx: CanvasRenderingContext2D, loc: LocationNode): voi
 }
 
 // ---------------------------------------------------------------------------
+// ROOFS SEEN FROM ABOVE
+// ---------------------------------------------------------------------------
+
+interface RoofRect { x: number; y: number; w: number; h: number }
+
+/** Roof outline: footprint + eaves, reaching down over the top of the wall. */
+function roofRectFor(loc: LocationNode, wallTop: number): RoofRect {
+  return { x: loc.x - 6, y: loc.y, w: loc.width + 12, h: wallTop - loc.y + 8 };
+}
+
+function fillPoly(ctx: CanvasRenderingContext2D, pts: Array<[number, number]>, fill: string): void {
+  ctx.beginPath();
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.closePath();
+  ctx.fillStyle = fill;
+  ctx.fill();
+  ctx.strokeStyle = INK;
+  ctx.lineWidth = 1.6;
+  ctx.stroke();
+}
+
+function drawRoofTop(
+  ctx: CanvasRenderingContext2D,
+  loc: LocationNode,
+  style: Typology,
+  R: RoofRect,
+): void {
+  const { x: rx, y: ry, w: rw, h: rh } = R;
+  const roof = style.roof;
+  const midY = ry + rh / 2;
+
+  const outline = () => {
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = LINE;
+    roundRect(ctx, rx, ry, rw, rh, 6);
+    ctx.stroke();
+  };
+
+  switch (style.roofKind) {
+    case 'gable':
+    case 'shopfront': {
+      if (style.roofKind === 'shopfront') {
+        drawFlatRoof(ctx, loc, style, R);
+        return;
+      }
+      // Pitched roof, ridge running along the street: back slope catches the
+      // light, the camera-side slope is a little darker.
+      const ridgeY = ry + rh * 0.42;
+      ctx.save();
+      roundRect(ctx, rx, ry, rw, rh, 6);
+      ctx.clip();
+      ctx.fillStyle = shade(roof, 0.12);
+      ctx.fillRect(rx, ry, rw, ridgeY - ry);
+      ctx.fillStyle = shade(roof, -0.07);
+      ctx.fillRect(rx, ridgeY, rw, ry + rh - ridgeY);
+      ctx.strokeStyle = shade(roof, -0.24);
+      ctx.lineWidth = 1.2;
+      for (let ly = ry + 8; ly < ry + rh; ly += 9) {
+        if (Math.abs(ly - ridgeY) < 4) continue;
+        ctx.beginPath();
+        ctx.moveTo(rx, ly);
+        ctx.lineTo(rx + rw, ly);
+        ctx.stroke();
+      }
+      ctx.restore();
+      ctx.strokeStyle = shade(roof, 0.42);
+      ctx.lineWidth = 3.5;
+      ctx.beginPath();
+      ctx.moveTo(rx + 4, ridgeY);
+      ctx.lineTo(rx + rw - 4, ridgeY);
+      ctx.stroke();
+      outline();
+
+      if (loc.type === 'home') {
+        const cx = loc.x + loc.width - 64;
+        const cy = ry + 10;
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.18)';
+        ctx.fillRect(cx + 4, cy + 6, 22, 26);
+        ctx.fillStyle = '#9E3F2C';
+        ctx.strokeStyle = INK;
+        ctx.lineWidth = 2;
+        ctx.fillRect(cx, cy, 20, 24);
+        ctx.strokeRect(cx, cy, 20, 24);
+        ctx.fillStyle = '#3B2A25';
+        ctx.fillRect(cx + 4, cy + 4, 12, 9);
+      }
+      return;
+    }
+
+    case 'hip':
+    case 'portico': {
+      const ins = Math.min(rw * 0.28, rh * 0.95);
+      const P: [number, number] = [rx + ins, midY];
+      const Q: [number, number] = [rx + rw - ins, midY];
+      fillPoly(ctx, [[rx, ry], [rx + rw, ry], Q, P], shade(roof, 0.12));
+      fillPoly(ctx, [[rx, ry + rh], [rx + rw, ry + rh], Q, P], shade(roof, -0.06));
+      fillPoly(ctx, [[rx, ry], [rx, ry + rh], P], shade(roof, 0.02));
+      fillPoly(ctx, [[rx + rw, ry], [rx + rw, ry + rh], Q], shade(roof, -0.16));
+      ctx.strokeStyle = shade(roof, 0.42);
+      ctx.lineWidth = 3.5;
+      ctx.beginPath();
+      ctx.moveTo(P[0], P[1]);
+      ctx.lineTo(Q[0], Q[1]);
+      ctx.stroke();
+      outline();
+      return;
+    }
+
+    case 'sawtooth': {
+      const teeth = Math.max(3, Math.round(rw / 80));
+      const step = rw / teeth;
+      for (let i = 0; i < teeth; i++) {
+        const sx = rx + step * i;
+        // sloped steel sheet, then the north-light glazing strip
+        ctx.fillStyle = shade(roof, i % 2 ? -0.04 : 0.04);
+        ctx.fillRect(sx, ry, step * 0.62, rh);
+        ctx.fillStyle = '#CFE9DE';
+        ctx.fillRect(sx + step * 0.62, ry, step * 0.38, rh);
+        ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        ctx.moveTo(sx + step * 0.7, ry + 3);
+        ctx.lineTo(sx + step * 0.7, ry + rh - 3);
+        ctx.stroke();
+        ctx.strokeStyle = INK;
+        ctx.lineWidth = 1.2;
+        ctx.strokeRect(sx, ry, step, rh);
+      }
+      outline();
+      return;
+    }
+
+    case 'marquee':
+    case 'flat':
+    default:
+      drawFlatRoof(ctx, loc, style, R);
+  }
+}
+
+/** Flat roof: membrane, raised coping and the plant that sits on it. */
+function drawFlatRoof(
+  ctx: CanvasRenderingContext2D,
+  loc: LocationNode,
+  style: Typology,
+  R: RoofRect,
+): void {
+  const { x: rx, y: ry, w: rw, h: rh } = R;
+
+  ctx.fillStyle = shade(style.roof, 0.1);
+  ctx.strokeStyle = INK;
+  ctx.lineWidth = LINE;
+  roundRect(ctx, rx, ry, rw, rh, 6);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.strokeStyle = shade(style.roof, 0.45);
+  ctx.lineWidth = 4;
+  roundRect(ctx, rx + 6, ry + 6, rw - 12, rh - 12, 3);
+  ctx.stroke();
+
+  ctx.fillStyle = shade(style.roof, -0.04);
+  roundRect(ctx, rx + 10, ry + 10, rw - 20, rh - 20, 2);
+  ctx.fill();
+
+  // Standing seams + a drainage fall line keep a big flat roof from reading as a slab.
+  ctx.save();
+  roundRect(ctx, rx + 10, ry + 10, rw - 20, rh - 20, 2);
+  ctx.clip();
+  ctx.strokeStyle = shade(style.roof, 0.16);
+  ctx.lineWidth = 1.4;
+  for (let sx = rx + 34; sx < rx + rw - 10; sx += 28) {
+    ctx.beginPath();
+    ctx.moveTo(sx, ry + 10);
+    ctx.lineTo(sx, ry + rh - 10);
+    ctx.stroke();
+  }
+  ctx.strokeStyle = shade(style.roof, -0.2);
+  ctx.setLineDash([6, 6]);
+  ctx.beginPath();
+  ctx.moveTo(rx + 14, ry + rh * 0.62);
+  ctx.lineTo(rx + rw - 14, ry + rh * 0.62);
+  ctx.stroke();
+  ctx.restore();
+
+  // Plant on the LEFT and RIGHT ends only: the venue plate sits mid-roof.
+  const unit = (ux: number, uy: number, i: number) => {
+    ctx.fillStyle = '#B4C1C9';
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 1.4;
+    ctx.fillRect(ux, uy, 26, 16);
+    ctx.strokeRect(ux, uy, 26, 16);
+    ctx.beginPath();
+    ctx.arc(ux + 13, uy + 8, 4.5, 0, Math.PI * 2);
+    ctx.stroke();
+    void i;
+  };
+  const uy = ry + Math.max(14, rh - 40);
+  unit(rx + 18, uy, 0);
+  if (rw > 300) unit(rx + rw - 44, uy - (hash01(loc.id, 9) > 0.5 ? 0 : 4), 1);
+
+  if (loc.type === 'hospital' && rh > 70) {
+    const r = Math.min(30, rh / 2 - 12);
+    const hx = rx + rw - 64;
+    const hy = ry + rh / 2;
+    ctx.fillStyle = '#F5F8FA';
+    ctx.strokeStyle = '#E53935';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(hx, hy, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#E53935';
+    ctx.font = `bold ${Math.round(r * 1.1)}px system-ui, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('H', hx, hy + 1);
+    ctx.textBaseline = 'alphabetic';
+  }
+
+  if (loc.type === 'office') {
+    // PV rows
+    ctx.fillStyle = '#2F4E73';
+    ctx.strokeStyle = '#9FC3E8';
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 3; i++) {
+      const px = rx + rw - 120 + i * 32;
+      ctx.fillRect(px, ry + 18, 26, 14);
+      ctx.strokeRect(px, ry + 18, 26, 14);
+    }
+  }
+}
+
+/**
+ * Shop awning / cinema marquee seen from above on the REAL front edge, for
+ * buildings whose shopfront does not face the camera.
+ */
+function drawEdgeAwning(
+  ctx: CanvasRenderingContext2D,
+  loc: LocationNode,
+  style: Typology,
+  side: Side,
+  wallTop: number,
+): void {
+  const cinema = loc.type === 'cinema';
+  const depth = 15;
+  const horizontal = side === 'north';
+  const start = horizontal ? loc.x + 4 : loc.y + 4;
+  const end = horizontal ? loc.x + loc.width - 4 : wallTop - 2;
+  const stripe = 16;
+
+  ctx.save();
+  for (let p = start, i = 0; p < end; p += stripe, i++) {
+    const len = Math.min(stripe, end - p);
+    ctx.fillStyle = cinema ? (i % 2 ? '#2D1F47' : '#4A3466') : (i % 2 ? '#FFFFFF' : style.roof);
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 1.2;
+    let bx: number;
+    let by: number;
+    let bw: number;
+    let bh: number;
+    if (side === 'north') { bx = p; by = loc.y - 6; bw = len; bh = depth; }
+    else if (side === 'east') { bx = loc.x + loc.width - depth + 6; by = p; bw = depth; bh = len; }
+    else { bx = loc.x - 6; by = p; bw = depth; bh = len; }
+    ctx.fillRect(bx, by, bw, bh);
+    ctx.strokeRect(bx, by, bw, bh);
+    if (cinema && i % 2 === 0) {
+      ctx.fillStyle = '#FFE082';
+      ctx.beginPath();
+      ctx.arc(horizontal ? bx + bw / 2 : bx + bw / 2 + (side === 'east' ? 3 : -3),
+        horizontal ? by + 3 : by + bh / 2, 2.6, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  ctx.restore();
+}
+
+/**
+ * Porch over the real door for any frontage that is not the camera-side wall:
+ * a projecting canopy + stone steps at `loc.door`, which is exactly where the
+ * citizens walk in.
+ */
+function drawPortal(
+  ctx: CanvasRenderingContext2D,
+  loc: LocationNode,
+  style: Typology,
+  side: Side,
+  isNight: boolean,
+): void {
+  const { x: dx, y: dy } = loc.door;
+  const along = 64;
+  const out = 24;
+  const horizontal = side === 'north';
+
+  // rectangles are expressed as [x, y, w, h]
+  let canopy: [number, number, number, number];
+  let steps: [number, number, number, number];
+  if (side === 'north') {
+    canopy = [dx - along / 2, dy - out, along, out];
+    steps = [dx - along / 2 + 8, dy - out - 9, along - 16, out + 9];
+  } else if (side === 'east') {
+    canopy = [dx, dy - along / 2, out, along];
+    steps = [dx, dy - along / 2 + 8, out + 9, along - 16];
+  } else {
+    canopy = [dx - out, dy - along / 2, out, along];
+    steps = [dx - out - 9, dy - along / 2 + 8, out + 9, along - 16];
+  }
+
+  if (isNight) {
+    const gx = side === 'east' ? dx + 18 : side === 'west' ? dx - 18 : dx;
+    const gy = side === 'north' ? dy - 18 : dy;
+    const glow = ctx.createRadialGradient(gx, gy, 4, gx, gy, 62);
+    glow.addColorStop(0, 'rgba(255, 214, 122, 0.42)');
+    glow.addColorStop(1, 'rgba(255, 214, 122, 0)');
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(gx, gy, 62, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // stone steps
+  ctx.fillStyle = shade(style.wall, -0.18);
+  ctx.strokeStyle = INK;
+  ctx.lineWidth = 1.4;
+  ctx.fillRect(...steps);
+  ctx.strokeRect(...steps);
+  ctx.strokeStyle = 'rgba(44, 62, 80, 0.35)';
+  ctx.lineWidth = 1;
+  for (let i = 1; i < 3; i++) {
+    ctx.beginPath();
+    if (horizontal) {
+      const ly = steps[1] + (steps[3] * i) / 3;
+      ctx.moveTo(steps[0], ly);
+      ctx.lineTo(steps[0] + steps[2], ly);
+    } else {
+      const lx = steps[0] + (steps[2] * i) / 3;
+      ctx.moveTo(lx, steps[1]);
+      ctx.lineTo(lx, steps[1] + steps[3]);
+    }
+    ctx.stroke();
+  }
+
+  // canopy slab with its own cast shadow
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.16)';
+  ctx.fillRect(canopy[0] + 3, canopy[1] + 4, canopy[2], canopy[3]);
+  ctx.fillStyle = style.roof;
+  ctx.strokeStyle = INK;
+  ctx.lineWidth = 2;
+  roundRect(ctx, ...canopy, 3);
+  ctx.fill();
+  ctx.stroke();
+  ctx.strokeStyle = shade(style.roof, 0.4);
+  ctx.lineWidth = 2.4;
+  ctx.beginPath();
+  if (horizontal) {
+    ctx.moveTo(canopy[0] + 4, canopy[1] + 4);
+    ctx.lineTo(canopy[0] + canopy[2] - 4, canopy[1] + 4);
+  } else {
+    const ex = side === 'east' ? canopy[0] + canopy[2] - 4 : canopy[0] + 4;
+    ctx.moveTo(ex, canopy[1] + 4);
+    ctx.lineTo(ex, canopy[1] + canopy[3] - 4);
+  }
+  ctx.stroke();
+
+  // two posts on the outer corners
+  ctx.fillStyle = style.trim;
+  ctx.strokeStyle = INK;
+  ctx.lineWidth = 1.4;
+  const posts: Array<[number, number]> = side === 'north'
+    ? [[canopy[0] + 3, canopy[1] + 3], [canopy[0] + canopy[2] - 3, canopy[1] + 3]]
+    : side === 'east'
+      ? [[canopy[0] + canopy[2] - 3, canopy[1] + 3], [canopy[0] + canopy[2] - 3, canopy[1] + canopy[3] - 3]]
+      : [[canopy[0] + 3, canopy[1] + 3], [canopy[0] + 3, canopy[1] + canopy[3] - 3]];
+  posts.forEach(([px, py]) => {
+    ctx.beginPath();
+    ctx.arc(px, py, 3.4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  });
+}
+
+// ---------------------------------------------------------------------------
 // ENTRY POINT
 // ---------------------------------------------------------------------------
 
@@ -1598,34 +1820,53 @@ export function drawBuilding(
     return;
   }
 
-  const massing = computeMassing(loc, style);
+  // --- Massing -------------------------------------------------------------
+  // The footprint (loc) is split into a ROOF seen from above (north part) and
+  // the south WALL the camera looks at. The entrance is built on the edge the
+  // real door is on, so what you see is where citizens actually walk in.
+  const side = frontSide(loc);
+  const southFront = side === 'south';
+  const shop = style.storefront && southFront;
+  // A shop whose real front is north/east/west keeps its shop identity on the
+  // roof edge (awning), while its visible south wall is a plain flank.
+  const wallStyle: Typology = shop ? style : { ...style, storefront: false };
+  const wallH = wallHeightFor(loc, wallStyle, shop);
+  const wall = wallRect(loc, wallH);
+  const roofR = roofRectFor(loc, wall.y);
+  const massing = computeMassing(wall, wallStyle);
 
   drawContactShadow(ctx, loc);
-  drawShell(ctx, loc, style);
-  drawSideReveal(ctx, loc);
-  drawTexture(ctx, loc, style);
-  drawPilasters(ctx, loc, style, massing.bays);
-  drawOpenings(ctx, loc, style, massing, opts.isNight);
-  drawCornice(ctx, loc, style);
-  drawPlinth(ctx, loc, style);
-  drawGroundShadow(ctx, loc);
+  drawShell(ctx, wall, wallStyle);
+  drawSideReveal(ctx, wall);
+  drawTexture(ctx, wall, wallStyle);
+  drawPilasters(ctx, wall, wallStyle, massing.bays);
+  drawOpenings(ctx, wall, wallStyle, massing, opts.isNight, southFront);
+  drawPlinth(ctx, wall, wallStyle);
+  drawGroundShadow(ctx, wall);
 
   const doorCenterX = clamp(loc.door.x, loc.x + 44, loc.x + loc.width - 44);
 
-  if (style.storefront) drawShopfront(ctx, loc, style, opts.isNight, doorCenterX);
-  drawEntrance(ctx, loc, style, opts.isNight, style.storefront);
-  drawSignature(ctx, loc, style, opts.isNight, massing);
+  if (shop) drawShopfront(ctx, wall, wallStyle, opts.isNight, doorCenterX);
+  if (southFront) drawEntrance(ctx, wall, wallStyle, opts.isNight, shop);
+  drawSignature(ctx, wall, wallStyle, opts.isNight, massing);
 
-  switch (style.roofKind) {
-    case 'gable': drawGableRoof(ctx, loc, style); break;
-    case 'hip': drawHipRoof(ctx, loc, style); break;
-    case 'flat': drawParapet(ctx, loc, style); break;
-    case 'sawtooth': drawSawtoothRoof(ctx, loc, style); break;
-    case 'marquee': drawMarquee(ctx, loc, style); break;
-    case 'portico': drawHipRoof(ctx, loc, style); drawPortico(ctx, loc, style, doorCenterX); break;
-    case 'shopfront': drawParapet(ctx, loc, style); break;
-    default: break;
+  drawRoofTop(ctx, loc, style, roofR);
+
+  // Eave shadow on the wall directly below the roof edge.
+  const eave = ctx.createLinearGradient(0, wall.y + 8, 0, wall.y + 22);
+  eave.addColorStop(0, 'rgba(15, 23, 42, 0.30)');
+  eave.addColorStop(1, 'rgba(15, 23, 42, 0)');
+  ctx.fillStyle = eave;
+  ctx.fillRect(loc.x + 2, wall.y + 8, loc.width - 4, 14);
+
+  if (southFront) {
+    if (style.roofKind === 'portico') drawPortico(ctx, wall, style, doorCenterX);
+  } else {
+    if (style.storefront) drawEdgeAwning(ctx, loc, style, side, wall.y);
+    drawPortal(ctx, loc, style, side, opts.isNight);
   }
+
+  if (loc.type === 'cityhall') drawFlag(ctx, loc);
 
   if (loc.type === 'home') {
     const phase = (opts.smokeTimer % 1.6) / 1.6;
@@ -1633,14 +1874,14 @@ export function drawBuilding(
       const t = (phase + i / 3) % 1;
       ctx.fillStyle = `rgba(236, 239, 241, ${0.5 * (1 - t)})`;
       ctx.beginPath();
-      ctx.arc(loc.x + loc.width - 54 + Math.sin(opts.smokeTimer * 2 + i) * 5, loc.y - 34 - t * 34, 5 + t * 8, 0, Math.PI * 2);
+      ctx.arc(loc.x + loc.width - 54 + Math.sin(opts.smokeTimer * 2 + i) * 5, loc.y + 8 - t * 30, 5 + t * 8, 0, Math.PI * 2);
       ctx.fill();
     }
   }
 
   const reading = readService(loc, opts);
 
-  if (opts.isSnowing) drawSnowCap(ctx, loc);
+  if (opts.isSnowing) drawSnowCap(ctx, roofR);
 
   if (opts.selectedLocationId === loc.id) drawSelection(ctx, loc);
 }
